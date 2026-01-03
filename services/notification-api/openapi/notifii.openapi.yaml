@@ -12,11 +12,8 @@ info:
 servers:
   - url: http://localhost:8000
     description: Local dev
-  - url: http://{host}
-    description: Deployed (ALB DNS or custom domain)
-    variables:
-      host:
-        default: example-alb-dns.amazonaws.com
+  - url: http://notifii-dev-notification-api-alb-763396971.us-east-1.elb.amazonaws.com
+    description: Dev (ECS behind ALB)
 
 tags:
   - name: Health
@@ -81,32 +78,34 @@ paths:
         Accepts a notification request and enqueues it for asynchronous processing
         by the appropriate channel microservice.
       operationId: sendNotification
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SendNotificationRequest"
-            examples:
-              emailExample:
-                value:
-                  channel: email
-                  recipient: test@example.com
-                  message: "Welcome to Notifii!"
-                  idempotency_key: "8c1e7f8a-2f7f-4a4a-9f10-1e39c8d4d9d1"
-              smsExample:
-                value:
-                  channel: sms
-                  recipient: "+12145551234"
-                  message: "Your code is 123456"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SendNotificationRequest"
+          examples:
+            emailExample:
+              summary: Queue an email notification
+              value:
+                channel: email
+                recipient: "user@example.com"
+                message: "Welcome to Notifii!"
+                idempotency_key: "welcome-2026-01-03-user@example.com"
+            smsExample:
+              summary: Queue an SMS notification
+              value:
+                channel: sms
+                recipient: "+18175551234"
+                message: "Your code is 123456"
               pushExample:
                 value:
                   channel: push
                   recipient: "device-token-or-user-id"
                   message: "You have a new alert"
-      responses:
+    responses:
         "202":
-          description: Accepted and queued for delivery
+          description: Notification request accepted and queued
           content:
             application/json:
               schema:
@@ -114,11 +113,11 @@ paths:
               examples:
                 queued:
                   value:
-                    message_id: "a5c7b5fe-4f65-4f1b-b8a6-6fd6c2d4f5a1"
+                    message_id: "3f3d2b2a-0e5b-4e7b-a6b8-bf0123456789"
                     status: queued
 
         "400":
-          description: Validation error (malformed payload, missing fields, invalid enums)
+          description: Validation error
           content:
             application/json:
               schema:
@@ -127,11 +126,11 @@ paths:
                 invalidChannel:
                   value:
                     error:
-                      code: VALIDATION_ERROR
-                      message: "Invalid 'channel' value"
+                      code: "VALIDATION_ERROR"
+                      message: "Request validation failed"
                       details:
-                        - field: channel
-                          issue: "Must be one of: email, sms, push"
+                        - field: "channel"
+                          issue: "Input should be 'email', 'sms' or 'push'"
 
         "409":
           description: Idempotency conflict (request already processed with this idempotency key)
@@ -172,7 +171,7 @@ paths:
                 serverError:
                   value:
                     error:
-                      code: INTERNAL_ERROR
+                      code: "INTERNAL_ERROR"
                       message: "Unexpected error occurred"
 
 components:
