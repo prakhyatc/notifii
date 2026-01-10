@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/Version-2.0.0-blue?style=for-the-badge)]()
 [![Status](https://img.shields.io/badge/Status-Production_Ready-22c55e?style=for-the-badge)]()
 
-[Live Demo](#-live-system-verification) · [Technical Blog](#) · [Architecture](#-system-architecture) · [API Reference](#-api-reference)
+[Technical Blog](#) · [Architecture](#-system-architecture) · [API Reference](#-api-reference)
 
 ---
 
@@ -35,12 +35,12 @@ Notifii solves this by **separating concerns into three planes:**
 
 ---
 
-## 🏗 System Architecture
+## System Architecture
 
 ### High-Level Overview
 
 <!-- Replace with your actual diagram -->
-![System Architecture](./docs/diagrams/high-level-architecture.png)
+![System Architecture](./docs/High-Level%20System%20Architecture.png)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
@@ -102,12 +102,12 @@ Notifii solves this by **separating concerns into three planes:**
 ### Message Flow Pipeline
 
 <!-- Replace with your actual diagram -->
-![Message Flow](./docs/diagrams/message-flow-pipeline.png)
+![Message Flow](./docs/Message%20Flow%20&%20Event-Driven%20Pipeline.png)
 
 ### Request Lifecycle
 
 <!-- Replace with your actual diagram -->
-![Request Lifecycle](./docs/diagrams/request-lifecycle-sequence.png)
+![Request Lifecycle](./docs/Request%20Lifecycle%20Sequence%20(Contract-first+async).png)
 
 ---
 
@@ -165,7 +165,7 @@ Notifii solves this by **separating concerns into three planes:**
 
 ---
 
-## 💡 Core Design Decisions
+## Core Design Decisions
 
 ### 1. Asynchronous Decoupling
 
@@ -266,7 +266,7 @@ paths:
 ### 4. Elastic Worker Scaling
 
 <!-- Replace with your actual diagram -->
-![Autoscaling](./docs/diagrams/worker-autoscaling.png)
+![Autoscaling](./docs/Worker%20Autoscaling%20Behavior.png)
 
 ```
 Queue Depth    Workers    Behavior
@@ -533,12 +533,12 @@ curl http://$(terraform output -raw notification_api_alb_dns)/health
 
 | Diagram | Description |
 |---------|-------------|
-| [High-Level Architecture](./docs/diagrams/high-level-architecture.png) | Complete system overview with all three planes |
-| [Message Flow Pipeline](./docs/diagrams/message-flow-pipeline.png) | Four phases of message processing |
-| [Request Lifecycle](./docs/diagrams/request-lifecycle-sequence.png) | Sequence diagram from request to delivery |
-| [Worker Autoscaling](./docs/diagrams/worker-autoscaling.png) | Elastic scaling based on queue depth |
-| [Infrastructure Modules](./docs/diagrams/infrastructure-architecture.png) | Terraform module organization |
-| [Failure Handling](./docs/diagrams/failure-handling-dlq.png) | Retry behavior and DLQ flow |
+| [High-Level Architecture](./docs/High-Level%20System%20Architecture.png) | Complete system overview with all three planes |
+| [Message Flow Pipeline](./docs/Message%20Flow%20&%20Event-Driven%20Pipeline.png) | Four phases of message processing |
+| [Request Lifecycle](./docs/Request%20Lifecycle%20Sequence%20(Contract-first+async).png) | Sequence diagram from request to delivery |
+| [Worker Autoscaling](./docs/Worker%20Autoscaling%20Behavior.png) | Elastic scaling based on queue depth |
+| [Infrastructure Modules](./docs/Infrastructure%20Architecture%20(Terraform%20Modules).png) | Terraform module organization |
+| [Failure Handling](./docs/Failure%20Handling%20&%20Dead%20Letter%20Queue%20Flow.png) | Retry behavior and DLQ flow |
 
 ---
 
@@ -558,7 +558,7 @@ curl http://$(terraform output -raw notification_api_alb_dns)/health
 ## Learn More
 
 - [Technical Deep Dive (Blog Post)](#)
-- [Architecture Diagrams](./docs/diagrams/)
+- [Architecture Diagrams](./docs)
 - [OpenAPI Specification](./services/notification-api/openapi/notifii.openapi.yaml)
 
 ---
