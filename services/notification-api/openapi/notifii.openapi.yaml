@@ -72,38 +72,33 @@ paths:
 
   /v1/notifications:send:
     post:
-      tags: [Notifications]
+      tags: ["Notifications"]
       summary: Enqueue a notification request
       description: |
         Accepts a notification request and enqueues it for asynchronous processing
         by the appropriate channel microservice.
       operationId: sendNotification
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SendNotificationRequest"
-          examples:
-            emailExample:
-              summary: Queue an email notification
-              value:
-                channel: email
-                recipient: "user@example.com"
-                message: "Welcome to Notifii!"
-                idempotency_key: "welcome-2026-01-03-user@example.com"
-            smsExample:
-              summary: Queue an SMS notification
-              value:
-                channel: sms
-                recipient: "+18175551234"
-                message: "Your code is 123456"
-              pushExample:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendNotificationRequest"
+            examples:
+              emailExample:
+                summary: Queue an email notification
                 value:
-                  channel: push
-                  recipient: "device-token-or-user-id"
-                  message: "You have a new alert"
-    responses:
+                  channel: email
+                  recipient: "user@example.com"
+                  message: "Welcome to Notifii!"
+                  idempotency_key: "welcome-2026-01-03-user@example.com"
+              smsExample:
+                summary: Queue an SMS notification
+                value:
+                  channel: sms
+                  recipient: "+18175551234"
+                  message: "Your verification code is 123456"
+      responses:
         "202":
           description: Notification request accepted and queued
           content:
@@ -115,7 +110,6 @@ paths:
                   value:
                     message_id: "3f3d2b2a-0e5b-4e7b-a6b8-bf0123456789"
                     status: queued
-
         "400":
           description: Validation error
           content:
@@ -126,100 +120,28 @@ paths:
                 invalidChannel:
                   value:
                     error:
-                      code: "VALIDATION_ERROR"
-                      message: "Request validation failed"
+                      code: VALIDATION_ERROR
+                      message: Request validation failed
                       details:
-                        - field: "channel"
+                        - field: channel
                           issue: "Input should be 'email', 'sms' or 'push'"
-
-        "409":
-          description: Idempotency conflict (request already processed with this idempotency key)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                idempotencyConflict:
-                  value:
-                    error:
-                      code: IDEMPOTENCY_CONFLICT
-                      message: "Request with this idempotency_key already exists"
-                      details:
-                        - field: idempotency_key
-                          issue: "Duplicate key"
-
-        "429":
-          description: Rate limit exceeded (reserved for future)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              examples:
-                rateLimited:
-                  value:
-                    error:
-                      code: RATE_LIMITED
-                      message: "Too many requests"
-
         "500":
-          description: Internal server error
+          description: Internal error
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               examples:
-                serverError:
+                internal:
                   value:
                     error:
-                      code: "INTERNAL_ERROR"
-                      message: "Unexpected error occurred"
+                      code: INTERNAL_ERROR
+                      message: Unexpected error occurred
 
 components:
   schemas:
-    Channel:
-      type: string
-      description: Notification delivery channel
-      enum: [email, sms, push]
-
-    SendNotificationRequest:
-      type: object
-      additionalProperties: false
-      required: [channel, recipient, message]
-      properties:
-        channel:
-          $ref: "#/components/schemas/Channel"
-        recipient:
-          type: string
-          minLength: 1
-          description: Destination identifier (email address, phone number, device token, or user id)
-        message:
-          type: string
-          minLength: 1
-          maxLength: 5000
-          description: Message body content
-        idempotency_key:
-          type: string
-          description: |
-            Optional idempotency key to safely retry requests without creating duplicates.
-            Recommended to be a UUID.
-          minLength: 1
-
-    SendNotificationResponse:
-      type: object
-      additionalProperties: false
-      required: [message_id, status]
-      properties:
-        message_id:
-          type: string
-          description: Unique identifier for the enqueued message
-        status:
-          type: string
-          enum: [queued]
-          description: Current enqueue status
-
     HealthResponse:
       type: object
-      additionalProperties: false
       required: [status]
       properties:
         status:
@@ -228,42 +150,56 @@ components:
 
     ReadyResponse:
       type: object
-      additionalProperties: false
       required: [status]
       properties:
         status:
           type: string
           enum: [ready]
 
-    ErrorDetail:
+    SendNotificationRequest:
       type: object
-      additionalProperties: false
+      required: [channel, recipient, message]
       properties:
-        field:
+        channel:
           type: string
-        issue:
+          enum: [email, sms, push]
+        recipient:
           type: string
-
-    ErrorObject:
-      type: object
-      additionalProperties: false
-      required: [code, message]
-      properties:
-        code:
-          type: string
-          description: Machine-readable error code
         message:
           type: string
-          description: Human-readable error message
-        details:
-          type: array
-          items:
-            $ref: "#/components/schemas/ErrorDetail"
+        idempotency_key:
+          type: string
+          nullable: true
+
+    SendNotificationResponse:
+      type: object
+      required: [message_id, status]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
 
     ErrorResponse:
       type: object
-      additionalProperties: false
       required: [error]
       properties:
         error:
-          $ref: "#/components/schemas/ErrorObject"
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
