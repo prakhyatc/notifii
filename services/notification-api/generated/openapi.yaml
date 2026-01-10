@@ -1,0 +1,327 @@
+openapi: 3.0.3
+info:
+  contact:
+    email: maintainer@example.com
+    name: Notifii Maintainers
+  description: |
+    Notifii is a cloud-native notification platform providing a contract-first API
+    for enqueueing email, SMS, and push notification requests.
+  title: Notifii Notification API
+  version: 1.0.0
+servers:
+- description: Local dev
+  url: http://localhost:8000
+- description: Deployed (ALB DNS or custom domain)
+  url: "http://{host}"
+  variables:
+    host:
+      default: example-alb-dns.amazonaws.com
+tags:
+- description: Service health and readiness endpoints
+  name: Health
+- description: Notification enqueueing endpoints
+  name: Notifications
+paths:
+  /health:
+    get:
+      description: Returns 200 if the service process is running.
+      operationId: getHealth
+      responses:
+        "200":
+          content:
+            application/json:
+              examples:
+                ok:
+                  value:
+                    status: ok
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+          description: Service is healthy
+      summary: Liveness probe
+      tags:
+      - Health
+  /ready:
+    get:
+      description: Returns 200 when the service is ready to accept traffic.
+      operationId: getReady
+      responses:
+        "200":
+          content:
+            application/json:
+              examples:
+                ready:
+                  value:
+                    status: ready
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+          description: Service is ready
+        "503":
+          content:
+            application/json:
+              examples:
+                notReady:
+                  value:
+                    error:
+                      code: SERVICE_NOT_READY
+                      message: Dependencies not initialized
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Service is not ready
+      summary: Readiness probe
+      tags:
+      - Health
+  /v1/notifications:send:
+    post:
+      description: |
+        Accepts a notification request and enqueues it for asynchronous processing
+        by the appropriate channel microservice.
+      operationId: sendNotification
+      requestBody:
+        content:
+          application/json:
+            examples:
+              emailExample:
+                value:
+                  channel: email
+                  recipient: test@example.com
+                  message: Welcome to Notifii!
+                  idempotency_key: 8c1e7f8a-2f7f-4a4a-9f10-1e39c8d4d9d1
+              smsExample:
+                value:
+                  channel: sms
+                  recipient: "+12145551234"
+                  message: Your code is 123456
+              pushExample:
+                value:
+                  channel: push
+                  recipient: device-token-or-user-id
+                  message: You have a new alert
+            schema:
+              $ref: "#/components/schemas/SendNotificationRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              examples:
+                queued:
+                  value:
+                    message_id: a5c7b5fe-4f65-4f1b-b8a6-6fd6c2d4f5a1
+                    status: queued
+              schema:
+                $ref: "#/components/schemas/SendNotificationResponse"
+          description: Accepted and queued for delivery
+        "400":
+          content:
+            application/json:
+              examples:
+                invalidChannel:
+                  value:
+                    error:
+                      code: VALIDATION_ERROR
+                      message: Invalid 'channel' value
+                      details:
+                      - field: channel
+                        issue: "Must be one of: email, sms, push"
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: "Validation error (malformed payload, missing fields, invalid\
+            \ enums)"
+        "409":
+          content:
+            application/json:
+              examples:
+                idempotencyConflict:
+                  value:
+                    error:
+                      code: IDEMPOTENCY_CONFLICT
+                      message: Request with this idempotency_key already exists
+                      details:
+                      - field: idempotency_key
+                        issue: Duplicate key
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Idempotency conflict (request already processed with this idempotency
+            key)
+        "429":
+          content:
+            application/json:
+              examples:
+                rateLimited:
+                  value:
+                    error:
+                      code: RATE_LIMITED
+                      message: Too many requests
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Rate limit exceeded (reserved for future)
+        "500":
+          content:
+            application/json:
+              examples:
+                serverError:
+                  value:
+                    error:
+                      code: INTERNAL_ERROR
+                      message: Unexpected error occurred
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+          description: Internal server error
+      summary: Enqueue a notification request
+      tags:
+      - Notifications
+components:
+  schemas:
+    Channel:
+      description: Notification delivery channel
+      enum:
+      - email
+      - sms
+      - push
+      title: Channel
+      type: string
+    SendNotificationRequest:
+      additionalProperties: false
+      example:
+        channel: email
+        recipient: recipient
+        idempotency_key: idempotency_key
+        message: message
+      properties:
+        channel:
+          $ref: "#/components/schemas/Channel"
+        recipient:
+          description: "Destination identifier (email address, phone number, device\
+            \ token, or user id)"
+          minLength: 1
+          title: recipient
+          type: string
+        message:
+          description: Message body content
+          maxLength: 5000
+          minLength: 1
+          title: message
+          type: string
+        idempotency_key:
+          description: |
+            Optional idempotency key to safely retry requests without creating duplicates.
+            Recommended to be a UUID.
+          minLength: 1
+          title: idempotency_key
+          type: string
+      required:
+      - channel
+      - message
+      - recipient
+      title: SendNotificationRequest
+      type: object
+    SendNotificationResponse:
+      additionalProperties: false
+      example:
+        message_id: message_id
+        status: queued
+      properties:
+        message_id:
+          description: Unique identifier for the enqueued message
+          title: message_id
+          type: string
+        status:
+          description: Current enqueue status
+          enum:
+          - queued
+          title: status
+          type: string
+      required:
+      - message_id
+      - status
+      title: SendNotificationResponse
+      type: object
+    HealthResponse:
+      additionalProperties: false
+      example:
+        status: ok
+      properties:
+        status:
+          enum:
+          - ok
+          title: status
+          type: string
+      required:
+      - status
+      title: HealthResponse
+      type: object
+    ReadyResponse:
+      additionalProperties: false
+      example:
+        status: ready
+      properties:
+        status:
+          enum:
+          - ready
+          title: status
+          type: string
+      required:
+      - status
+      title: ReadyResponse
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      example:
+        field: field
+        issue: issue
+      properties:
+        field:
+          title: field
+          type: string
+        issue:
+          title: issue
+          type: string
+      title: ErrorDetail
+      type: object
+    ErrorObject:
+      additionalProperties: false
+      example:
+        code: code
+        details:
+        - field: field
+          issue: issue
+        - field: field
+          issue: issue
+        message: message
+      properties:
+        code:
+          description: Machine-readable error code
+          title: code
+          type: string
+        message:
+          description: Human-readable error message
+          title: message
+          type: string
+        details:
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          title: details
+          type: array
+      required:
+      - code
+      - message
+      title: ErrorObject
+      type: object
+    ErrorResponse:
+      additionalProperties: false
+      example:
+        error:
+          code: code
+          details:
+          - field: field
+            issue: issue
+          - field: field
+            issue: issue
+          message: message
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+      required:
+      - error
+      title: ErrorResponse
+      type: object

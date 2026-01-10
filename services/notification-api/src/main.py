@@ -7,12 +7,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, Request
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+
+from fastapi import FastAPI, Header, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 APP_ENV = os.getenv("APP_ENV", "dev")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+QUEUE_URL = os.getenv("NOTIFII_QUEUE_URL")
 
+sqs = boto3.client("sqs", region_name=AWS_REGION)
 # ----------------------------
 # Logging (structured JSON)
 # ----------------------------
@@ -183,11 +189,51 @@ async def send_notification(
 ) -> Dict[str, Any]:
     # Trace ID: prefer header if present, otherwise create one for logs
     trace_id = x_request_id or str(uuid4())
+    if not QUEUE_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="NOTIFII_QUEUE_URL is not configured",
+        )
+
 
     message_id = str(uuid4())
+    request_id = trace_id
 
     # Placeholder enqueue (Week 1–2): simulate async queue publish
     # Later: publish to SQS (and store idempotency mapping if idempotency_key provided)
+    sqs_payload = {
+        "message_id": message_id,
+        "request_id": request_id,
+        "channel": payload.channel,
+        "recipient": payload.recipient,
+        "message": payload.message,
+        "idempotency_key": payload.idempotency_key,
+        "timestamp": utc_now_iso(),
+    }
+
+    try:
+        sqs.send_message(
+            QueueUrl=QUEUE_URL,
+            MessageBody=json.dumps(sqs_payload),
+            MessageAttributes={
+                "channel": {
+                    "DataType": "String",
+                    "StringValue": payload.channel,
+                }
+            },
+        )
+    except (BotoCoreError, ClientError) as e:
+        log_json(
+            "ERROR",
+            "sqs_send_failed",
+            trace_id=trace_id,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to enqueue notification",
+        )
+
     log_json(
         "INFO",
         "notification_queued",
@@ -199,5 +245,7 @@ async def send_notification(
         method=request.method,
     )
 
-    resp = SendNotificationResponse(message_id=message_id, status="queued").model_dump()
-    return resp
+    return SendNotificationResponse(
+        message_id=message_id,
+        status="queued",
+    ).model_dump()
