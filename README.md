@@ -1,5 +1,3 @@
-<![CDATA[<div align="center">
-
 # Notifii
 
 **Cloud-Native, Event-Driven Notification Platform**
@@ -586,4 +584,3 @@ MIT License — see [LICENSE](LICENSE) for details.
 [⬆ Back to Top](#-notifii)
 
 </div>
-]]>
