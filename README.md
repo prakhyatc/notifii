@@ -2,6 +2,9 @@
 
 Notifii is a contract-first, cloud-native notification platform designed to reliably enqueue and deliver outbound notifications across multiple channels (email, SMS, and push). The system is built using platform engineering principles: isolated microservices, immutable infrastructure, strict API contracts, and operational visibility.
 
+![Version](https://img.shields.io/badge/version-v1.0.0-blue)
+![AWS](https://img.shields.io/badge/AWS-Serverless-orange)
+![Status](https://img.shields.io/badge/status-production--ready-green)
 ---
 
 ## Architecture (Week 1–2)
