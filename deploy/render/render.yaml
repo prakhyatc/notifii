@@ -6,6 +6,7 @@ services:
     dockerfilePath: services/notification-api/Dockerfile
     dockerContext: .
     healthCheckPath: /health
+    plan: free
     envVars:
       - key: QUEUE_BACKEND
         value: redis
@@ -29,6 +30,7 @@ services:
     runtime: docker
     dockerfilePath: services/email-worker/Dockerfile
     dockerContext: .
+    plan: free
     envVars:
       - key: QUEUE_BACKEND
         value: redis
@@ -48,11 +50,16 @@ services:
           name: notifii-redis
           property: connectionString
 
-  # --- Dashboard (static site) ---
-  - type: web
-    name: notifii-dashboard
+# --- Dashboard (static site — separate section) ---
+staticSites:
+  - name: notifii-dashboard
     buildCommand: cd dashboard && npm install && npm run build
     staticPublishPath: dashboard/dist
+    pullRequestPreviewsEnabled: false
+    headers:
+      - path: /*
+        name: Access-Control-Allow-Origin
+        value: "*"
     envVars:
       - key: VITE_API_URL
         fromService:
