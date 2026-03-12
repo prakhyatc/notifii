@@ -5,7 +5,7 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
   && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY services/email-worker/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
   && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
 
@@ -19,7 +19,9 @@ COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
   && rm -rf /wheels
 
-COPY src ./src
+COPY services/shared ./services/shared
+COPY services/email-worker/src ./src
+
 USER app
 
 ENV PYTHONUNBUFFERED=1

@@ -1,0 +1,66 @@
+services:
+  # --- Notification API ---
+  - type: web
+    name: notifii-api
+    runtime: docker
+    dockerfilePath: services/notification-api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: QUEUE_BACKEND
+        value: redis
+      - key: EMAIL_PROVIDER
+        value: console
+      - key: IDEMPOTENCY_BACKEND
+        value: redis
+      - key: DEMO_MODE
+        value: "true"
+      - key: APP_ENV
+        value: prod
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: notifii-redis
+          property: connectionString
+
+  # --- Email Worker ---
+  - type: worker
+    name: notifii-worker
+    runtime: docker
+    dockerfilePath: services/email-worker/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: QUEUE_BACKEND
+        value: redis
+      - key: EMAIL_PROVIDER
+        value: console
+      - key: IDEMPOTENCY_BACKEND
+        value: redis
+      - key: APP_ENV
+        value: prod
+      - key: POLL_WAIT_SECONDS
+        value: "5"
+      - key: MAX_BATCH
+        value: "10"
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: notifii-redis
+          property: connectionString
+
+  # --- Dashboard (static site) ---
+  - type: web
+    name: notifii-dashboard
+    buildCommand: cd dashboard && npm install && npm run build
+    staticPublishPath: dashboard/dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: notifii-api
+          property: host
+
+# --- Redis ---
+databases:
+  - name: notifii-redis
+    plan: free

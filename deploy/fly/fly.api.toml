@@ -1,0 +1,35 @@
+app = "notifii-api"
+primary_region = "iad"
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "services/notification-api/Dockerfile"
+
+[env]
+  QUEUE_BACKEND = "redis"
+  EMAIL_PROVIDER = "console"
+  IDEMPOTENCY_BACKEND = "redis"
+  APP_ENV = "prod"
+  DEMO_MODE = "true"
+  RATE_LIMIT_PER_MIN = "30"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"

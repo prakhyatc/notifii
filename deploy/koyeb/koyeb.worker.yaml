@@ -1,0 +1,26 @@
+name: notifii-worker
+type: worker
+docker:
+  dockerfile: services/email-worker/Dockerfile
+  context: .
+env:
+  - key: QUEUE_BACKEND
+    value: redis
+  - key: EMAIL_PROVIDER
+    value: console
+  - key: IDEMPOTENCY_BACKEND
+    value: redis
+  - key: APP_ENV
+    value: prod
+  - key: POLL_WAIT_SECONDS
+    value: "5"
+  - key: MAX_BATCH
+    value: "10"
+  - key: REDIS_URL
+    value: ""  # Set via Koyeb dashboard (use Upstash URL)
+instance_type: nano
+regions:
+  - was
+scaling:
+  min: 1
+  max: 1

@@ -1,0 +1,84 @@
+version: "3.9"
+
+services:
+  # ── Message Queue ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Email Catcher (local SMTP) ────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8025"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Ingress Plane (FastAPI) ───────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: services/notification-api/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - QUEUE_BACKEND=redis
+      - REDIS_URL=redis://redis:6379/0
+      - EMAIL_PROVIDER=smtp
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - IDEMPOTENCY_BACKEND=redis
+      - APP_ENV=dev
+      - DEMO_MODE=true
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Delivery Plane (Worker) ───────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: services/email-worker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - QUEUE_BACKEND=redis
+      - REDIS_URL=redis://redis:6379/0
+      - EMAIL_PROVIDER=smtp
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - IDEMPOTENCY_BACKEND=redis
+      - APP_ENV=dev
+      - POLL_WAIT_SECONDS=5
+      - MAX_BATCH=10
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mailhog:
+        condition: service_healthy
+
+volumes:
+  redis-data:

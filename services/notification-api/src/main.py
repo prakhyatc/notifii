@@ -1,57 +1,74 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
+import sys
+import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 from uuid import uuid4
 
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError
-
 from fastapi import FastAPI, Header, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+from services.shared.queue import QueueAdapter, create_queue_adapter
+from services.shared.idempotency import IdempotencyStore, create_idempotency_store
+from services.shared.observability import (
+    StructuredLogger,
+    MetricsCollector,
+    metrics,
+    RequestIdMiddleware,
+    get_request_id,
+    init_tracing,
+    instrument_fastapi,
+    inject_trace_context,
+    start_span,
+    get_current_trace_id,
+)
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
 APP_ENV = os.getenv("APP_ENV", "dev")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-QUEUE_URL = os.getenv("NOTIFII_QUEUE_URL")
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 
-sqs = boto3.client("sqs", region_name=AWS_REGION)
-# ----------------------------
-# Logging (structured JSON)
-# ----------------------------
-logger = logging.getLogger("notifii.notification_api")
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-handler.setFormatter(logging.Formatter("%(message)s"))
-logger.handlers = [handler]
+log = StructuredLogger("notification-api")
 
+# ---------------------------------------------------------------------------
+# Globals initialised in lifespan
+# ---------------------------------------------------------------------------
+queue: QueueAdapter | None = None
+idempotency: IdempotencyStore | None = None
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# Failure simulation flags (toggled via /internal endpoints)
+_simulate_provider_failure = False
+_simulate_slow_delivery = False
 
 
-def log_json(level: str, event: str, **fields: Any) -> None:
-    payload = {
-        "timestamp": utc_now_iso(),
-        "level": level,
-        "service": "notification-api",
-        "env": APP_ENV,
-        "event": event,
-        **fields,
-    }
-    line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-    if level == "ERROR":
-        logger.error(line)
-    else:
-        logger.info(line)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global queue, idempotency
+    init_tracing("notifii-api")
+    queue = create_queue_adapter()
+    idempotency = create_idempotency_store()
+    log.info("api_started", queue_backend=os.getenv("QUEUE_BACKEND", "redis"), demo_mode=DEMO_MODE)
+    yield
+    if queue:
+        await queue.close()
+    if idempotency:
+        await idempotency.close()
+    log.info("api_stopped")
 
 
-# ----------------------------
-# API Schemas (Pydantic)
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 Channel = Literal["email", "sms", "push"]
 
 
@@ -98,154 +115,337 @@ class SendNotificationResponse(BaseModel):
     status: Literal["queued"]
 
 
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Simple in-memory rate limiter for demo mode
+# ---------------------------------------------------------------------------
+_rate_window: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    if not DEMO_MODE:
+        return True
+    now = time.time()
+    window = _rate_window.setdefault(client_ip, [])
+    window[:] = [t for t in window if now - t < 60]
+    if len(window) >= RATE_LIMIT_PER_MIN:
+        return False
+    window.append(now)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # App
-# ----------------------------
+# ---------------------------------------------------------------------------
 app = FastAPI(
     title="Notifii Notification API",
-    version="1.0.0",
+    version="2.0.0",
+    description="Cloud-agnostic, event-driven notification platform",
+    lifespan=lifespan,
+)
+
+instrument_fastapi(app)
+
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-# ----------------------------
-# Global error handling
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
 @app.exception_handler(ValidationError)
 async def pydantic_validation_error_handler(request: Request, exc: ValidationError):
     details = []
     for err in exc.errors():
-        # err["loc"] can be like ("body", "channel")
         loc = err.get("loc", [])
-        field = None
-        if isinstance(loc, (list, tuple)) and len(loc) >= 2:
-            field = str(loc[-1])
+        field = str(loc[-1]) if isinstance(loc, (list, tuple)) and len(loc) >= 2 else None
         details.append(ErrorDetail(field=field, issue=err.get("msg", "Invalid value")))
 
-    trace_id = request.headers.get("x-request-id")
     body = ErrorResponse(
-        error=ErrorObject(
-            code="VALIDATION_ERROR",
-            message="Request validation failed",
-            details=details,
-        )
+        error=ErrorObject(code="VALIDATION_ERROR", message="Request validation failed", details=details)
     ).model_dump()
 
-    log_json(
-        "ERROR",
-        "validation_error",
-        trace_id=trace_id,
-        path=str(request.url.path),
-        method=request.method,
-        detail_count=len(details),
-    )
+    log.error("validation_error", trace_id=get_request_id(), path=str(request.url.path), detail_count=len(details))
     return JSONResponse(status_code=400, content=body)
 
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    trace_id = request.headers.get("x-request-id")
     body = ErrorResponse(
-        error=ErrorObject(
-            code="INTERNAL_ERROR",
-            message="Unexpected error occurred",
-        )
+        error=ErrorObject(code="INTERNAL_ERROR", message="Unexpected error occurred")
     ).model_dump()
-
-    log_json(
-        "ERROR",
+    log.error(
         "unhandled_exception",
-        trace_id=trace_id,
+        trace_id=get_request_id(),
         path=str(request.url.path),
-        method=request.method,
         exception_type=type(exc).__name__,
     )
     return JSONResponse(status_code=500, content=body)
 
 
-# ----------------------------
+# ---------------------------------------------------------------------------
 # Health endpoints
-# ----------------------------
+# ---------------------------------------------------------------------------
 @app.get("/health")
 async def health() -> Dict[str, str]:
-    # Liveness: if process is up, it's OK
     return {"status": "ok"}
 
 
 @app.get("/ready")
 async def ready() -> Dict[str, str]:
-    # Readiness: check dependencies (DB, queue, etc.)
-    # Week 1–2: same as health
     return {"status": "ready"}
 
 
-# ----------------------------
+# ---------------------------------------------------------------------------
+# Metrics endpoint (Prometheus-compatible)
+# ---------------------------------------------------------------------------
+@app.get("/metrics")
+async def metrics_endpoint():
+    return PlainTextResponse(metrics.prometheus_text(), media_type="text/plain; version=0.0.4")
+
+
+@app.get("/metrics/json")
+async def metrics_json():
+    return metrics.snapshot()
+
+
+# ---------------------------------------------------------------------------
 # Core endpoint: enqueue notification
-# ----------------------------
+# ---------------------------------------------------------------------------
 @app.post("/v1/notifications:send", status_code=202)
 async def send_notification(
     payload: SendNotificationRequest,
     request: Request,
     x_request_id: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    # Trace ID: prefer header if present, otherwise create one for logs
-    trace_id = x_request_id or str(uuid4())
-    if not QUEUE_URL:
-        raise HTTPException(
-            status_code=500,
-            detail="NOTIFII_QUEUE_URL is not configured",
-        )
+    trace_id = x_request_id or get_request_id() or str(uuid4())
+    metrics.inc("notifications_received_total")
 
+    if not _check_rate_limit(request.client.host if request.client else "unknown"):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded (demo mode)")
+
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
 
     message_id = str(uuid4())
-    request_id = trace_id
 
-    # Placeholder enqueue (Week 1–2): simulate async queue publish
-    # Later: publish to SQS (and store idempotency mapping if idempotency_key provided)
-    sqs_payload = {
+    # Idempotency check
+    if payload.idempotency_key and idempotency:
+        existing = await idempotency.check_and_set(payload.idempotency_key, message_id)
+        if existing:
+            metrics.inc("idempotency_duplicates_total")
+            log.info(
+                "idempotency_duplicate",
+                trace_id=trace_id,
+                idempotency_key=payload.idempotency_key,
+                original_message_id=existing.message_id,
+            )
+            return SendNotificationResponse(message_id=existing.message_id, status="queued").model_dump()
+
+    queue_payload = inject_trace_context({
         "message_id": message_id,
-        "request_id": request_id,
+        "request_id": trace_id,
         "channel": payload.channel,
         "recipient": payload.recipient,
         "message": payload.message,
         "idempotency_key": payload.idempotency_key,
-        "timestamp": utc_now_iso(),
-    }
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "simulate_failure": _simulate_provider_failure,
+        "simulate_slow": _simulate_slow_delivery,
+    })
 
     try:
-        sqs.send_message(
-            QueueUrl=QUEUE_URL,
-            MessageBody=json.dumps(sqs_payload),
-            MessageAttributes={
-                "channel": {
-                    "DataType": "String",
-                    "StringValue": payload.channel,
-                }
-            },
-        )
-    except (BotoCoreError, ClientError) as e:
-        log_json(
-            "ERROR",
-            "sqs_send_failed",
-            trace_id=trace_id,
-            error=str(e),
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to enqueue notification",
-        )
+        await queue.send(queue_payload, attributes={"channel": payload.channel})
+    except Exception as exc:
+        log.error("queue_send_failed", trace_id=trace_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to enqueue notification")
 
-    log_json(
-        "INFO",
+    metrics.inc("notifications_queued_total")
+    log.info(
         "notification_queued",
         trace_id=trace_id,
         message_id=message_id,
         channel=payload.channel,
         has_idempotency_key=bool(payload.idempotency_key),
-        path=str(request.url.path),
-        method=request.method,
     )
 
-    return SendNotificationResponse(
-        message_id=message_id,
-        status="queued",
-    ).model_dump()
+    return SendNotificationResponse(message_id=message_id, status="queued").model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Admin / Dashboard API endpoints
+# ---------------------------------------------------------------------------
+@app.get("/v1/queue/depth")
+async def queue_depth_endpoint():
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+    depth = await queue.queue_depth()
+    metrics.set_gauge("queue_depth", depth)
+    return {"queue_depth": depth}
+
+
+@app.get("/v1/queue/dlq")
+async def dlq_messages_endpoint(count: int = 20):
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+    if hasattr(queue, "dlq_messages"):
+        messages = await queue.dlq_messages(count)
+        return {"dlq_messages": messages, "count": len(messages)}
+    return {"dlq_messages": [], "count": 0, "note": "DLQ inspection not supported by current queue backend"}
+
+
+@app.post("/v1/queue/dlq/{entry_id}/retry")
+async def retry_dlq_message_endpoint(entry_id: str):
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+    if hasattr(queue, "retry_dlq_message"):
+        new_id = await queue.retry_dlq_message(entry_id)
+        if new_id:
+            return {"status": "retried", "new_stream_id": new_id}
+        raise HTTPException(status_code=404, detail="DLQ entry not found")
+    raise HTTPException(status_code=501, detail="DLQ retry not supported by current queue backend")
+
+
+@app.get("/v1/notifications/recent")
+async def recent_notifications(count: int = 20):
+    """Return recent processed notifications from Redis (if available)."""
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+    try:
+        import redis.asyncio as aioredis
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        r = aioredis.from_url(redis_url, decode_responses=True)
+        raw = await r.lrange("notifii:recent_notifications", 0, count - 1)
+        await r.aclose()
+        notifications = [json.loads(item) for item in raw]
+        return {"notifications": notifications, "count": len(notifications)}
+    except Exception:
+        return {"notifications": [], "count": 0, "note": "Recent notifications unavailable"}
+
+
+# ---------------------------------------------------------------------------
+# Failure simulation (interview demo endpoints)
+# ---------------------------------------------------------------------------
+@app.post("/internal/simulate/provider-failure")
+async def simulate_provider_failure(enable: bool = True):
+    global _simulate_provider_failure
+    _simulate_provider_failure = enable
+    log.info("simulation_toggled", simulation="provider_failure", enabled=enable)
+    return {"simulation": "provider_failure", "enabled": enable}
+
+
+@app.post("/internal/simulate/slow-delivery")
+async def simulate_slow_delivery(enable: bool = True):
+    global _simulate_slow_delivery
+    _simulate_slow_delivery = enable
+    log.info("simulation_toggled", simulation="slow_delivery", enabled=enable)
+    return {"simulation": "slow_delivery", "enabled": enable}
+
+
+@app.get("/internal/config")
+async def internal_config():
+    return {
+        "queue_backend": os.getenv("QUEUE_BACKEND", "redis"),
+        "email_provider": os.getenv("EMAIL_PROVIDER", "console"),
+        "idempotency_backend": os.getenv("IDEMPOTENCY_BACKEND", "redis"),
+        "demo_mode": DEMO_MODE,
+        "simulate_provider_failure": _simulate_provider_failure,
+        "simulate_slow_delivery": _simulate_slow_delivery,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Demo endpoints (recruiter-friendly interactive demo)
+# ---------------------------------------------------------------------------
+DEMO_SEED_DATA = [
+    {"channel": "email", "recipient": "alice@example.com", "message": "Your order #1042 has been shipped!"},
+    {"channel": "email", "recipient": "bob@example.com", "message": "Password reset requested for your account."},
+    {"channel": "email", "recipient": "carol@example.com", "message": "Welcome to Notifii! Your account is ready."},
+    {"channel": "email", "recipient": "dave@example.com", "message": "Payment of $49.99 processed successfully."},
+    {"channel": "email", "recipient": "eve@example.com", "message": "New login detected from San Francisco, CA."},
+]
+
+_demo_activity: list[dict] = []
+
+
+@app.post("/demo/seed")
+async def demo_seed():
+    """Seed the queue with example notifications to demonstrate the pipeline."""
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+
+    seeded = []
+    for item in DEMO_SEED_DATA:
+        message_id = str(uuid4())
+        payload = inject_trace_context({
+            "message_id": message_id,
+            "request_id": f"demo-seed-{message_id[:8]}",
+            "channel": item["channel"],
+            "recipient": item["recipient"],
+            "message": item["message"],
+            "idempotency_key": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "simulate_failure": False,
+            "simulate_slow": False,
+        })
+        await queue.send(payload, attributes={"channel": item["channel"]})
+        metrics.inc("notifications_received_total")
+        metrics.inc("notifications_queued_total")
+        seeded.append({"message_id": message_id, "recipient": item["recipient"]})
+        _demo_activity.append({
+            "action": "seed",
+            "message_id": message_id,
+            "recipient": item["recipient"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+    log.info("demo_seeded", count=len(seeded))
+    return {"status": "seeded", "count": len(seeded), "messages": seeded}
+
+
+@app.post("/demo/send-test")
+async def demo_send_test(
+    recipient: str = "demo@example.com",
+    message: str = "Test notification from Notifii playground!",
+):
+    """Quick single-notification send for the demo playground."""
+    if not queue:
+        raise HTTPException(status_code=503, detail="Queue not initialised")
+
+    message_id = str(uuid4())
+    payload = inject_trace_context({
+        "message_id": message_id,
+        "request_id": f"demo-test-{message_id[:8]}",
+        "channel": "email",
+        "recipient": recipient,
+        "message": message,
+        "idempotency_key": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "simulate_failure": _simulate_provider_failure,
+        "simulate_slow": _simulate_slow_delivery,
+    })
+    await queue.send(payload, attributes={"channel": "email"})
+    metrics.inc("notifications_received_total")
+    metrics.inc("notifications_queued_total")
+
+    _demo_activity.append({
+        "action": "send_test",
+        "message_id": message_id,
+        "recipient": recipient,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+    log.info("demo_send_test", message_id=message_id, recipient=recipient)
+    return {"message_id": message_id, "status": "queued", "recipient": recipient}
+
+
+@app.get("/demo/activity")
+async def demo_activity(limit: int = 50):
+    """Return recent demo activity log for the playground UI."""
+    return {"activity": _demo_activity[-limit:], "count": len(_demo_activity[-limit:])}

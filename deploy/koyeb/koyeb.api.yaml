@@ -1,0 +1,35 @@
+name: notifii-api
+type: web
+docker:
+  dockerfile: services/notification-api/Dockerfile
+  context: .
+ports:
+  - port: 8000
+    protocol: http
+health_checks:
+  - type: http
+    port: 8000
+    path: /health
+    interval: 30
+    timeout: 5
+    healthy_threshold: 2
+    unhealthy_threshold: 3
+env:
+  - key: QUEUE_BACKEND
+    value: redis
+  - key: EMAIL_PROVIDER
+    value: console
+  - key: IDEMPOTENCY_BACKEND
+    value: redis
+  - key: DEMO_MODE
+    value: "true"
+  - key: APP_ENV
+    value: prod
+  - key: REDIS_URL
+    value: ""  # Set via Koyeb dashboard (use Upstash URL)
+instance_type: nano
+regions:
+  - was
+scaling:
+  min: 1
+  max: 1

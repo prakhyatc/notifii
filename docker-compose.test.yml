@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+
+  test:
+    build:
+      context: .
+      dockerfile: services/notification-api/Dockerfile
+    entrypoint: ["python", "-m", "pytest", "-v", "--tb=short"]
+    working_dir: /app
+    environment:
+      - QUEUE_BACKEND=redis
+      - REDIS_URL=redis://redis:6379/0
+      - IDEMPOTENCY_BACKEND=memory
+      - EMAIL_PROVIDER=console
+      - APP_ENV=test
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/notification-api/tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini

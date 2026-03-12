@@ -1,39 +1,152 @@
-name: ci
+name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
 
 jobs:
-  notification_api:
+  # ─── Lint & Format ────────────────────────────────────────────
+  lint:
+    name: Lint & Format
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/notification-api
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Install Python tools
+        run: pip install ruff black
 
       - name: Ruff (lint)
-        run: ruff check .
+        run: ruff check services/
 
       - name: Black (format check)
-        run: black --check .
+        run: black --check services/
 
-      - name: Pytest
-        run: pytest -q
+  # ─── Unit Tests ───────────────────────────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Docker build
-        run: docker build -t notifii-notification-api:ci .
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r services/notification-api/requirements.txt
+          pip install pytest httpx
+
+      - name: Run tests
+        env:
+          QUEUE_BACKEND: memory
+          IDEMPOTENCY_BACKEND: memory
+          EMAIL_PROVIDER: console
+          APP_ENV: test
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/services/notification-api
+        run: pytest services/notification-api/tests/ -v --tb=short
+
+  # ─── Docker Build ─────────────────────────────────────────────
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      matrix:
+        service:
+          - name: notification-api
+            dockerfile: services/notification-api/Dockerfile
+          - name: email-worker
+            dockerfile: services/email-worker/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.service.name }}
+        run: |
+          docker build \
+            -f ${{ matrix.service.dockerfile }} \
+            -t notifii-${{ matrix.service.name }}:ci-${{ github.sha }} \
+            .
+
+  # ─── Dashboard Build ──────────────────────────────────────────
+  dashboard:
+    name: Dashboard Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install & build
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+  # ─── Integration Test (Docker Compose) ────────────────────────
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env file
+        run: |
+          cat > .env << 'EOF'
+          QUEUE_BACKEND=redis
+          REDIS_URL=redis://redis:6379/0
+          EMAIL_PROVIDER=console
+          IDEMPOTENCY_BACKEND=redis
+          APP_ENV=test
+          DEMO_MODE=true
+          EOF
+
+      - name: Start services
+        run: docker compose up --build -d
+
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "API is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API failed to start"
+          docker compose logs
+          exit 1
+
+      - name: Smoke test
+        run: |
+          # Send notification
+          curl -sf -X POST http://localhost:8000/v1/notifications:send \
+            -H "Content-Type: application/json" \
+            -d '{"channel":"email","recipient":"ci@test.com","message":"CI smoke test"}'
+
+          # Check queue depth
+          curl -sf http://localhost:8000/v1/queue/depth
+
+          # Check metrics
+          curl -sf http://localhost:8000/metrics
+
+          # Check health
+          curl -sf http://localhost:8000/health
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

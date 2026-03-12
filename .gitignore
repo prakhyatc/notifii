@@ -6,11 +6,17 @@
 **/.mypy_cache/
 **/.venv/
 **/venv/
+*.egg-info/
+*.egg
 
 # OS / editor
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
 # Terraform
 **/.terraform/
@@ -19,7 +25,30 @@
 **/terraform.tfstate.*
 **/crash.log
 **/crash.*.log
+*.tfvars
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# Node
+**/node_modules/
 
 # Build artifacts
 **/dist/
 **/build/
+
+# Docker
+docker-compose.override.yml
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Local history
+.history/
