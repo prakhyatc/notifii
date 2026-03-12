@@ -1,5 +1,7 @@
 # Notifii Architecture
 
+![Architecture Diagram](images/architecture.png)
+
 ## System Overview
 
 ```mermaid

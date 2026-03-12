@@ -1,8 +1,8 @@
 <p align="center">
   <h1 align="center">Notifii</h1>
   <p align="center">
-    <strong>Production-grade, cloud-agnostic notification platform</strong><br/>
-    Event-driven architecture &middot; Queue-backed durability &middot; Pluggable everything
+    <strong>Production-grade notification platform with event-driven architecture</strong><br/>
+    Queue-backed durability &middot; Pluggable providers &middot; Distributed tracing &middot; Zero config demo
   </p>
 </p>
 
@@ -17,56 +17,64 @@
 
 ## Demo
 
-> **Clone → run → explore in 30 seconds.** No cloud accounts needed.
+<!-- Replace with your recorded GIF: see docs/demo-recording.md for instructions -->
+![Architecture](docs/images/architecture.png)
+
+> **Clone and run in 30 seconds.** No cloud accounts. No API keys. No configuration.
 
 ```bash
-git clone https://github.com/prakhyatc/notifii.git && cd notifii && make run-demo
+git clone https://github.com/prakhyatc/notifii.git
+cd notifii
+make run-demo
 ```
 
-*Send notification → queue → deliver → simulate failure → DLQ → retry → success*
+*Send notification → queue → deliver → simulate failure → DLQ → retry → success. All visible in the dashboard.*
 
-<details>
-<summary><strong>How to record a demo GIF</strong></summary>
-
-```bash
-# Option 1: Terminal GIF with Charm VHS
-brew install charmbracelet/tap/vhs
-vhs docs/demo.tape          # outputs docs/demo.gif
-
-# Option 2: Browser capture
-# 1. Run: make run-demo
-# 2. Open https://gifcap.dev
-# 3. Record the dashboard workflow
-# 4. Save as docs/demo.gif
-```
-</details>
+> [Recording a demo GIF?](docs/demo-recording.md) — replace the diagram above with `docs/demo.gif` once recorded.
 
 ---
 
-## Why Notifii?
+## What Is This?
 
-It's a **real notification infrastructure** built the way companies like Twilio, Courier, and Novu build theirs:
+Notifii is a **notification delivery platform** built the way companies like Twilio, Courier, and Novu build theirs. The API accepts notification requests and returns 202 immediately. Messages flow through a durable queue (Redis Streams or SQS), are processed by a pool of workers, and delivered via pluggable email providers. Failed deliveries retry automatically; permanently failed messages route to a Dead Letter Queue for manual inspection.
 
-- **Event-driven** — API returns 202 immediately; delivery is async through a durable queue
-- **Queue-backed** — Messages survive crashes. Failed deliveries retry automatically. Poison messages route to a Dead Letter Queue
-- **Pluggable backends** — Swap queue (Redis/SQS), email (SMTP/Resend/SES), and storage (Redis/Memory) via environment variables
-- **Idempotent** — Duplicate requests return the original response, preventing double-sends
-- **Observable** — Structured JSON logs, request ID tracing, Prometheus metrics from day one
-- **Cloud-agnostic** — Same code runs locally with Docker Compose or on AWS with Terraform
+Everything — queue backend, email provider, idempotency store — is swappable via environment variables. The same code runs locally with Docker Compose or on AWS with Terraform.
 
-```
-Client  ──▶  FastAPI API  ──▶  Redis Streams  ──▶  Worker  ──▶  Email Provider
-               │                     │                │
-          Validation            Consumer Group    Retry + DLQ
-          Idempotency           Durability        Structured Logs
-          Rate Limiting         Ordering          Metrics
+---
+
+## Engineering Highlights
+
+### Event-Driven Architecture
+The API never delivers emails synchronously. Every notification is enqueued and returned as 202 Accepted in <50ms. Workers drain the queue independently, isolating API latency from provider latency. During provider outages, the queue absorbs all traffic with zero message loss.
+
+### Queue Abstraction Layer
+All queue operations go through a `QueueAdapter` abstract base class. Swap backends with one environment variable:
+- `QUEUE_BACKEND=redis` — Redis Streams with consumer groups, persistence, and ordering
+- `QUEUE_BACKEND=sqs` — AWS SQS with managed DLQ
+- `QUEUE_BACKEND=memory` — In-memory for testing (zero infrastructure)
+
+### Idempotency at Ingress
+Clients send an `idempotency_key` with their request. The API checks Redis atomically (`SET NX` with 24h TTL) before enqueuing. Duplicate requests return the original `message_id` — no re-queuing, no double-sends. This is the same pattern Stripe uses for payment idempotency.
+
+### Dead Letter Queue with Manual Retry
+Messages that fail delivery after max retries move to a DLQ (separate Redis Stream). The dashboard shows DLQ contents and supports one-click retry. Retried messages re-enter the main stream and follow the normal processing pipeline.
+
+### Retry Strategy
+Workers use the Redis consumer group's pending entry list (PEL) for retries. Unacknowledged messages are automatically reclaimed on the next poll cycle. After exhausting retries, messages are moved to the DLQ rather than being dropped.
+
+### Observability Stack
+Three pillars from day one — not bolted on later:
+- **Structured JSON logs** with automatic `trace_id` correlation
+- **Prometheus-compatible metrics** — counters for received/queued/delivered/failed, gauge for queue depth
+- **OpenTelemetry distributed tracing** — spans propagated from API through queue messages to worker delivery via W3C trace context
+
+```bash
+make up-jaeger    # Start with Jaeger → see traces at http://localhost:16686
 ```
 
 ---
 
 ## Quick Start
-
-**Everything runs locally with one command. No AWS. No API keys. No configuration.**
 
 ```bash
 git clone https://github.com/prakhyatc/notifii.git
@@ -128,43 +136,17 @@ cd dashboard && npm install && npm run dev
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph "Ingress Plane"
-        API[FastAPI API]
-        VAL[Pydantic Validation]
-        IDEM[Idempotency Check]
-    end
+![Architecture Diagram](docs/images/architecture.png)
 
-    subgraph "Control Plane"
-        Q[Redis Streams / SQS]
-        DLQ[Dead Letter Queue]
-    end
-
-    subgraph "Delivery Plane"
-        W[Worker Pool]
-    end
-
-    subgraph "Providers"
-        SMTP[SMTP]
-        RESEND[Resend]
-        SES[AWS SES]
-    end
-
-    Client -->|POST /v1/notifications:send| API
-    API --> VAL --> IDEM -->|XADD| Q
-    Q -->|Consumer Group| W
-    W --> SMTP & RESEND & SES
-    W -->|Max retries exceeded| DLQ
-    DLQ -->|Manual retry| Q
-
-    style API fill:#6c63ff,stroke:#6c63ff,color:#fff
-    style Q fill:#f59e0b,stroke:#f59e0b,color:#000
-    style DLQ fill:#ef4444,stroke:#ef4444,color:#fff
-    style W fill:#22c55e,stroke:#22c55e,color:#fff
+```
+Client ──▶ FastAPI API ──▶ Redis Streams ──▶ Worker Pool ──▶ Email Provider
+              │                  │                │
+         Validation        Consumer Group     Retry + DLQ
+         Idempotency       Persistence        Structured Logs
+         Rate Limiting     Ordering           Metrics + Traces
 ```
 
-> Full architecture diagrams with sequence flows, scaling strategies, and component breakdowns: [`docs/architecture.md`](docs/architecture.md)
+> Full Mermaid diagrams with sequence flows, scaling strategies, and component breakdowns: [`docs/architecture.md`](docs/architecture.md)
 
 ### Two Deployment Modes — Same Code
 
@@ -178,50 +160,16 @@ graph TB
 
 ---
 
-## System Design Highlights
+## Documentation
 
-### 1. Adapter Pattern for Portability
-Every external dependency sits behind an abstract interface. Swap backends with a single environment variable:
-
-```
-QUEUE_BACKEND=redis → RedisQueueAdapter (Redis Streams + consumer groups)
-QUEUE_BACKEND=sqs   → SQSAdapter (AWS SQS with DLQ)
-
-EMAIL_PROVIDER=console → Logs to stdout
-EMAIL_PROVIDER=smtp    → Any SMTP relay (Mailhog, Gmail, SendGrid)
-EMAIL_PROVIDER=resend  → Resend API (free tier)
-EMAIL_PROVIDER=ses     → AWS SES
-```
-
-### 2. Idempotency at Ingress
-Clients send an `idempotency_key` with their request. The API checks Redis (or memory) before enqueuing. Duplicate requests return the original `message_id` instantly — no re-queuing, no double-sends.
-
-### 3. Dead Letter Queue with Retry
-Messages that fail delivery after max retries are routed to a DLQ. The dashboard shows DLQ contents with a one-click retry button. This is the same pattern used by AWS SQS, RabbitMQ, and Kafka.
-
-### 4. Consumer Group Processing
-Redis Streams consumer groups ensure each message is processed by exactly one worker, even with multiple workers running. Pending entries are tracked and reclaimed if a worker dies mid-processing.
-
-### 5. Distributed Tracing (OpenTelemetry)
-End-to-end traces follow a notification from API ingress through queue processing to email delivery — across service boundaries. W3C trace context is propagated through queue message metadata.
-
-```bash
-# Start with Jaeger for local tracing
-make up-jaeger
-# Jaeger UI: http://localhost:16686 — see traces across API and Worker
-```
-
-> Full tracing architecture, span hierarchy, and backend options: [`docs/observability.md`](docs/observability.md)
-
-### 6. Failure Simulation 
-Toggle simulated failures via API:
-```bash
-# Enable: all new notifications will fail delivery
-curl -X POST localhost:8000/internal/simulate/provider-failure?enable=true
-
-# Send a notification → watch it go to DLQ
-# Disable failure → retry from DLQ → successful delivery
-```
+| Document | Description |
+|---|---|
+| [`docs/system-design.md`](docs/system-design.md) | Full system design case study — problem statement, requirements, architecture decisions, tradeoffs, scaling |
+| [`docs/architecture.md`](docs/architecture.md) | Mermaid diagrams — system overview, request lifecycle, component architecture, deployment modes, scaling |
+| [`docs/performance.md`](docs/performance.md) | Load testing with k6 — benchmark tables, queue buffering analysis, horizontal scaling recipes |
+| [`docs/observability.md`](docs/observability.md) | OpenTelemetry tracing, structured logging, Prometheus metrics — setup and architecture |
+| [`docs/interview-notes.md`](docs/interview-notes.md) | Interview talking points — design decisions, tradeoffs, scaling approach, improvement ideas |
+| [`docs/demo-recording.md`](docs/demo-recording.md) | How to record a demo GIF for the README |
 
 ---
 
@@ -269,24 +217,30 @@ curl -X POST localhost:8000/internal/simulate/provider-failure?enable=true
 ```
 notifii/
 ├── services/
-│   ├── shared/                        # Abstraction layers
+│   ├── shared/                        # Abstraction layers (the core of the project)
 │   │   ├── queue/                     # QueueAdapter ABC + Redis, SQS, Memory
 │   │   ├── email/                     # EmailAdapter ABC + SMTP, Resend, SES, Console
 │   │   ├── idempotency/              # IdempotencyStore ABC + Redis, Memory
-│   │   └── observability/            # Structured logging, metrics, middleware
+│   │   └── observability/            # Logging, metrics, middleware, OpenTelemetry
 │   ├── notification-api/             # FastAPI ingress (API + validation + routing)
 │   │   ├── src/main.py
 │   │   └── tests/                    # 19+ unit & integration tests
-│   └── email-worker/                 # Queue consumer + delivery
+│   └── email-worker/                 # Queue consumer + email delivery
 │       └── src/worker.py
 ├── dashboard/                         # React + Vite + Recharts admin UI
-├── deploy/                           # Fly.io, Railway, Render configs
-├── scripts/                          # Demo script
-├── docs/                             # Architecture diagrams (Mermaid)
+├── docs/                             # System design, architecture, performance, observability
+│   ├── system-design.md              # Full case study for interviews
+│   ├── architecture.md               # Mermaid diagrams
+│   ├── performance.md                # Benchmarks + k6 load testing
+│   ├── observability.md              # Tracing, logging, metrics
+│   └── interview-notes.md           # Talking points for interviews
+├── deploy/                           # Fly.io, Render, Koyeb configs
+├── load-tests/k6/                    # k6 load test scripts
+├── scripts/                          # Demo and helper scripts
 ├── infra/                            # Terraform (AWS production mode)
 ├── .github/workflows/ci.yml         # CI pipeline (lint → test → build → integration)
 ├── docker-compose.yml                # Local dev stack
-└── docker-compose.test.yml           # Containerized test runner
+└── docker-compose-jaeger.yml         # Stack with distributed tracing
 ```
 
 ---
@@ -411,19 +365,6 @@ make format      # Auto-format code
 # Dashboard
 cd dashboard && npm install && npm run dev
 ```
-
----
-
-## Architecture Decisions
-
-| Decision | Rationale |
-|---|---|
-| **Event-driven (async)** | Decouples ingress latency from delivery latency. API stays fast regardless of email provider speed. |
-| **Queue as durability layer** | Messages survive API restarts. Retry is automatic. Failed messages are isolated in DLQ. |
-| **Adapter pattern** | Every external dependency behind an ABC. Swap providers without changing business logic. |
-| **Contract-first API** | OpenAPI spec is the source of truth. Pydantic enforces the contract at runtime. |
-| **Structured observability** | JSON logs + request ID + Prometheus metrics from day one. Not bolted on later. |
-| **Consumer groups** | Multiple workers process messages in parallel without duplication. Built-in load balancing. |
 
 ---
 

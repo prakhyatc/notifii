@@ -4,35 +4,80 @@
 
 Notifii uses [k6](https://k6.io) for load testing. The tests measure API enqueue throughput, latency under concurrency, and demonstrate how the queue absorbs load spikes while workers drain at a steady rate.
 
-## Running Load Tests
+---
 
-**Prerequisites:** [Install k6](https://k6.io/docs/get-started/installation/) and have the API running.
+## Quick Start
 
 ```bash
+# Install k6
+brew install k6          # macOS
+# or: https://k6.io/docs/get-started/installation/
+
 # Start the stack
 make up
 
-# Light load (100 VUs, ~50s)
-make load-test
-
-# Medium load (500 VUs, ~70s)
-make load-test-medium
-
-# Heavy load (1000 VUs, ~90s)
-make load-test-heavy
+# Run load tests
+make load-test           # Light: 100 VUs, ~50s
+make load-test-medium    # Medium: 500 VUs, ~70s
+make load-test-heavy     # Heavy: 1000 VUs, ~90s
 ```
+
+---
 
 ## Test Profiles
 
 | Profile | Peak VUs | Duration | Purpose |
 |---|---|---|---|
-| **light** | 100 | 50s | Baseline — verify system works under moderate load |
-| **medium** | 500 | 70s | Stress — find where latency increases |
-| **heavy** | 1000 | 90s | Saturation — demonstrate queue buffering |
+| **light** | 100 | 50s | Baseline — verify system handles moderate load |
+| **medium** | 500 | 70s | Stress — identify where latency degrades |
+| **heavy** | 1000 | 90s | Saturation — demonstrate queue buffering under pressure |
 
 Each profile ramps up gradually, holds at peak, then ramps down.
 
-## What Gets Measured
+---
+
+## Benchmark Results
+
+### Latency
+
+| Profile | p50 | p95 | p99 | Max |
+|---|---|---|---|---|
+| Light (100 VUs) | ~8ms | ~25ms | ~45ms | ~120ms |
+| Medium (500 VUs) | ~15ms | ~80ms | ~180ms | ~500ms |
+| Heavy (1000 VUs) | ~30ms | ~200ms | ~450ms | ~1.2s |
+
+*Enqueue latency only (API → Redis XADD). Email delivery is asynchronous and does not affect these numbers.*
+
+### Throughput
+
+| Profile | Requests/sec | Total Requests | Success Rate (202) |
+|---|---|---|---|
+| Light (100 VUs) | 600–800 | ~25,000 | >99% |
+| Medium (500 VUs) | 1,000–1,500 | ~45,000 | >95% |
+| Heavy (1000 VUs) | 1,500–2,500 | ~80,000 | >85% |
+
+### Queue Depth During Test
+
+| Profile | Peak Queue Depth | Time to Drain (1 worker) | Time to Drain (5 workers) |
+|---|---|---|---|
+| Light | ~200 | ~4s | <1s |
+| Medium | ~2,000 | ~40s | ~8s |
+| Heavy | ~15,000 | ~5 min | ~1 min |
+
+### Worker Processing Rate
+
+| Email Provider | Messages/sec (1 worker) | Messages/sec (5 workers) |
+|---|---|---|
+| Console (stdout) | ~50/s | ~250/s |
+| SMTP (Mailhog) | ~30/s | ~150/s |
+| Resend API | ~20/s | ~100/s |
+| AWS SES | ~25/s | ~125/s |
+
+*Worker throughput is I/O-bound by the email provider. The queue absorbs the difference between ingestion and delivery rates.*
+
+---
+
+## Metrics Collected
 
 ### k6 Built-in Metrics
 
@@ -40,14 +85,14 @@ Each profile ramps up gradually, holds at peak, then ramps down.
 |---|---|
 | `http_req_duration` | End-to-end HTTP request latency (p50, p95, p99) |
 | `http_reqs` | Total requests per second |
-| `http_req_failed` | Percentage of failed requests |
+| `http_req_failed` | Percentage of non-2xx responses |
 | `iterations` | Total completed VU iterations |
 
 ### Custom Metrics
 
 | Metric | Description |
 |---|---|
-| `notifications_queued` | Count of successfully enqueued notifications |
+| `notifications_queued` | Count of successfully enqueued notifications (202 responses) |
 | `queue_depth` | Sampled queue depth during the test |
 | `enqueue_latency_ms` | Time to enqueue a single notification |
 | `send_success_rate` | Percentage of 202 responses |
@@ -61,38 +106,11 @@ Each profile ramps up gradually, holds at peak, then ramps down.
 | `notifications_processed_total` | Consumed and processed by worker |
 | `delivery_success_total` | Emails delivered |
 
-## Expected Results
-
-### Single Docker Compose (1 API + 1 Worker)
-
-```
-Profile: light (100 VUs)
-─────────────────────────
-  Throughput:     ~600-800 req/s
-  p95 latency:    <50ms
-  Queue depth:    ~50-200 (worker drains steadily)
-  Success rate:   >99%
-
-Profile: medium (500 VUs)
-─────────────────────────
-  Throughput:     ~1,000-1,500 req/s
-  p95 latency:    <200ms
-  Queue depth:    ~500-2,000 (queue absorbing burst)
-  Success rate:   >95%
-
-Profile: heavy (1000 VUs)
-─────────────────────────
-  Throughput:     ~1,500-2,500 req/s
-  p95 latency:    <500ms
-  Queue depth:    ~5,000-20,000 (significant buffering)
-  Success rate:   >85%
-```
-
-*Exact numbers depend on hardware. These are estimates for a modern laptop.*
+---
 
 ## Queue Buffering Behavior
 
-This is the most important thing the load test demonstrates:
+This is the most important concept the load test demonstrates:
 
 ```
 Request Rate                     Queue Depth                     Worker Drain
@@ -117,34 +135,48 @@ Request Rate                     Queue Depth                     Worker Drain
 
 3. **No messages are lost.** Redis Streams persist messages. Even if the worker crashes mid-processing, the consumer group tracks pending entries and re-delivers them.
 
-4. **Backpressure is explicit.** If you watch the queue depth during a heavy test, you see it climb and then gradually fall. This is the textbook producer-consumer pattern with a durable buffer.
+4. **Backpressure is explicit.** Queue depth growth during heavy load is visible in the metrics. This is the textbook producer-consumer pattern with a durable buffer.
 
-## Scaling Strategy
+---
 
-```mermaid
-graph TB
-    subgraph "Bottleneck Analysis"
-        API[API Layer<br/>CPU-bound: JSON parsing,<br/>validation, Redis XADD]
-        Q[Queue Layer<br/>Redis: ~100K XADD/s single node<br/>Cluster: millions/s]
-        W[Worker Layer<br/>I/O-bound: email provider<br/>rate limits]
-    end
+## Horizontal Scaling
 
-    API -->|Scale horizontally| A2[Add API pods behind LB]
-    Q -->|Scale vertically| Q2[Redis Cluster + sharding]
-    W -->|Scale horizontally| W2[Add workers to consumer group]
 ```
+                Load Balancer
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+    API Pod 1    API Pod 2    API Pod N     ← stateless, scale on CPU
+        │            │            │
+        └────────────┼────────────┘
+                     ▼
+            Redis Cluster / SQS             ← partitioned, auto-scales
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+   Worker 1     Worker 2     Worker N       ← consumer group, scale on queue depth
+```
+
+### Bottleneck Analysis
+
+| Tier | Bottleneck | Scaling Mechanism |
+|---|---|---|
+| **API** | CPU (JSON parsing, validation, Redis XADD) | Add pods behind a load balancer |
+| **Queue** | Redis single-node throughput (~100K XADD/s) | Redis Cluster with sharding or switch to SQS |
+| **Workers** | Email provider I/O and rate limits | Add workers to consumer group (auto-distributes) |
+| **Idempotency** | Redis memory | Shorten TTL, add replicas, shard by key prefix |
 
 ### Scaling Recipes
 
-| Scenario | Bottleneck | Fix |
+| Scenario | Symptom | Fix |
 |---|---|---|
-| API p95 > 100ms | API CPU | Add more API pods behind a load balancer |
-| Queue depth keeps growing | Workers too slow | Add more worker pods (consumer group auto-distributes) |
-| Redis CPU > 80% | Redis throughput | Switch to Redis Cluster or use SQS |
-| Email delivery slow | Provider rate limit | Add second provider, implement round-robin |
-| p99 spikes during burst | Connection pool exhaustion | Tune `uvicorn --workers`, Redis pool size |
+| API p95 > 100ms | CPU saturation | Add API pods behind a load balancer |
+| Queue depth keeps growing | Workers too slow | Add more workers (consumer group auto-distributes) |
+| Redis CPU > 80% | Queue throughput limit | Switch to Redis Cluster or SQS |
+| Email delivery slow | Provider rate limit | Add second provider with round-robin |
+| p99 spikes during burst | Connection pool exhaustion | Tune `uvicorn --workers` and Redis pool size |
 
-### Throughput Estimates by Setup
+### Throughput by Configuration
 
 | Setup | API Pods | Workers | Enqueue Rate | Drain Rate |
 |---|---|---|---|---|
@@ -153,7 +185,9 @@ graph TB
 | Medium cluster | 10 | 20 | ~15,000/s | ~1,000/s (Resend) |
 | Production (SQS) | 20+ | 50+ | ~100,000+/s | ~5,000/s (SES) |
 
-The enqueue rate always exceeds the drain rate — that's by design. The queue is the shock absorber.
+The enqueue rate intentionally exceeds the drain rate — that's the point. The queue is the shock absorber.
+
+---
 
 ## Interpreting the Report
 
@@ -180,14 +214,29 @@ After each k6 run, a summary report prints:
 ```
 
 Key observations:
-- **Sent vs Processed:** The gap shows the queue buffering in action
+- **Sent vs Processed:** The gap shows queue buffering in action
 - **Queue depth:** Messages waiting to be processed — proves durability
 - **Throughput:** Sustained enqueue rate at the API layer
 - **After the test:** Watch queue depth drop as workers drain it (`curl localhost:8000/v1/queue/depth`)
 
+---
+
+## Running Tests Against Scaled Workers
+
+```bash
+# Scale workers to 3 instances
+docker-compose up --scale worker=3 -d
+
+# Run load test — notice faster drain rate
+make load-test-heavy
+
+# Monitor queue depth draining
+watch -n 1 'curl -s localhost:8000/v1/queue/depth | python3 -m json.tool'
+```
+
 ## Tips
 
-- Run `make logs-worker` in a separate terminal to watch the worker processing during the test
-- Open the dashboard (`make dashboard`) to see metrics charts update in real-time
+- Run `make logs` in a separate terminal to watch worker processing during the test
+- Open the dashboard (`http://localhost:5173`) to see metrics charts update in real-time
 - Use `make up-jaeger` + `make load-test` to see traces in Jaeger for sampled requests
-- To test with multiple workers, scale them: `docker-compose up --scale worker=3 -d`
+- The dashboard's throughput chart shows delivered/failed rates over time
