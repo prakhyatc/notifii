@@ -7,12 +7,39 @@
 </p>
 
 <p align="center">
-  <a href="#-quick-start"><img src="https://img.shields.io/badge/Demo_in-60_seconds-6c63ff?style=for-the-badge" alt="Demo" /></a>
-  <a href="#"><img src="https://img.shields.io/github/actions/workflow/status/your-user/notifii/ci.yml?style=for-the-badge&label=CI" alt="CI" /></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/Demo_in-30_seconds-6c63ff?style=for-the-badge" alt="Demo" /></a>
+  <a href="https://github.com/prakhyatc/notifii/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/prakhyatc/notifii/ci.yml?style=for-the-badge&label=CI" alt="CI" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" /></a>
-  <a href="#"><img src="https://img.shields.io/badge/Cost-$0/month-22c55e?style=for-the-badge" alt="Free" /></a>
 </p>
+
+---
+
+## Demo
+
+> **Clone → run → explore in 30 seconds.** No cloud accounts needed.
+
+```bash
+git clone https://github.com/prakhyatc/notifii.git && cd notifii && make run-demo
+```
+
+*Send notification → queue → deliver → simulate failure → DLQ → retry → success*
+
+<details>
+<summary><strong>How to record a demo GIF</strong></summary>
+
+```bash
+# Option 1: Terminal GIF with Charm VHS
+brew install charmbracelet/tap/vhs
+vhs docs/demo.tape          # outputs docs/demo.gif
+
+# Option 2: Browser capture
+# 1. Run: make run-demo
+# 2. Open https://gifcap.dev
+# 3. Record the dashboard workflow
+# 4. Save as docs/demo.gif
+```
+</details>
 
 ---
 
@@ -42,7 +69,7 @@ Client  ──▶  FastAPI API  ──▶  Redis Streams  ──▶  Worker  ─
 **Everything runs locally with one command. No AWS. No API keys. No configuration.**
 
 ```bash
-git clone https://github.com/your-user/notifii.git
+git clone https://github.com/prakhyatc/notifii.git
 cd notifii
 make run-demo
 ```
@@ -284,30 +311,31 @@ All configuration via environment variables (see [`.env.example`](.env.example))
 
 ## Deployment
 
-### Free Tier (Total: $0/month)
+### Recommended: Run Locally (Cost: $0)
 
-| Component | Option 1 | Option 2 | Option 3 |
-|---|---|---|---|
-| API | Fly.io (3 free VMs) | Render (750 hrs/mo) | Koyeb (1 nano free) |
-| Worker | Fly.io | Render | Koyeb |
-| Redis | Upstash (10K cmds/day) | Render Redis | — |
-| Email | Resend (3K/mo) | Console | SMTP |
-| Dashboard | Vercel | Netlify | Cloudflare Pages |
-
-Deployment configs in [`deploy/`](deploy/):
+The project is designed to run entirely on your machine with Docker Compose — no cloud accounts, no API keys, no costs.
 
 ```bash
-# Fly.io (recommended)
-fly deploy --config deploy/fly/fly.api.toml
-
-# Render (auto-provisions from render.yaml)
-# Push to GitHub → Render dashboard → New Blueprint
-
-# Koyeb
-koyeb service create notifii-api --docker ghcr.io/your-user/notifii-api:latest
+make run-demo     # Full stack in 30 seconds
+make up           # Manual start
+make up-jaeger    # With distributed tracing (Jaeger UI at :16686)
 ```
 
-See [`deploy/README.md`](deploy/README.md) for full instructions.
+### Cloud Deployment Options
+
+Deployment configs are in [`deploy/`](deploy/) for Fly.io, Render, and Koyeb. All require Docker container hosting.
+
+| Component | Fly.io | Render | Koyeb |
+|---|---|---|---|
+| API | `fly deploy` | Blueprint | `koyeb service create` |
+| Worker | `fly deploy` | Blueprint | `koyeb service create` |
+| Redis | Upstash (free 10K cmds/day) | Managed ($7+/mo) | Upstash |
+| Email | Resend (free 3K/mo) | Resend | Resend |
+| Dashboard | Vercel (free) | Vercel (free) | Vercel (free) |
+
+> **Note:** Most Docker-hosting platforms (Render, Railway) no longer offer free compute tiers. Fly.io offers 3 free shared VMs but requires a credit card. For a zero-cost demo, use `make run-demo` locally.
+
+See [`deploy/README.md`](deploy/README.md) for full step-by-step instructions.
 
 ---
 

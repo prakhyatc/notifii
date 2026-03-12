@@ -6,7 +6,7 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-user/notifii.git
+git clone https://github.com/prakhyatc/notifii.git
 cd notifii
 
 # Option 1: Docker (recommended)

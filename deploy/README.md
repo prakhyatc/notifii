@@ -54,7 +54,7 @@ koyeb login
 
 # Deploy API
 koyeb service create notifii-api \
-  --docker "ghcr.io/your-user/notifii-api:latest" \
+  --docker "ghcr.io/prakhyatc/notifii-api:latest" \
   --port 8000:http \
   --env QUEUE_BACKEND=redis \
   --env REDIS_URL="your-upstash-url" \
@@ -65,7 +65,7 @@ koyeb service create notifii-api \
 
 # Deploy Worker
 koyeb service create notifii-worker \
-  --docker "ghcr.io/your-user/notifii-worker:latest" \
+  --docker "ghcr.io/prakhyatc/notifii-worker:latest" \
   --env QUEUE_BACKEND=redis \
   --env REDIS_URL="your-upstash-url" \
   --env EMAIL_PROVIDER=console \
