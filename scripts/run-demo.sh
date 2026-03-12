@@ -59,7 +59,7 @@ else
     echo -e "${BOLD}Starting Notifii stack...${RESET}"
     echo -e "${DIM}(API + Worker + Redis + Mailhog)${RESET}"
     echo ""
-    docker-compose up --build -d 2>&1 | tail -5
+    docker compose up --build -d 2>&1 | tail -5
 
     echo ""
     echo -ne "Waiting for API to be healthy "
@@ -74,7 +74,7 @@ else
         if [ "$i" -eq 40 ]; then
             echo ""
             echo -e "${RED}API failed to start in 40s.${RESET}"
-            echo "Check logs: docker-compose logs api"
+            echo "Check logs: docker compose logs api"
             exit 1
         fi
     done

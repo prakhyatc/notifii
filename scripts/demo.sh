@@ -35,8 +35,8 @@ header "Checking services"
 if curl -sf "$API/health" > /dev/null 2>&1; then
     ok "API is running at $API"
 else
-    warn "API not running. Starting with docker-compose..."
-    docker-compose up --build -d
+    warn "API not running. Starting with docker compose..."
+    docker compose up --build -d
     echo "Waiting for services to start..."
     for i in $(seq 1 30); do
         if curl -sf "$API/health" > /dev/null 2>&1; then
@@ -45,7 +45,7 @@ else
         fi
         sleep 1
         if [ "$i" -eq 30 ]; then
-            fail "Services failed to start. Run 'docker-compose logs' for details."
+            fail "Services failed to start. Run 'docker compose logs' for details."
             exit 1
         fi
     done

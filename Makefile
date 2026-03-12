@@ -16,39 +16,39 @@ test:
 
 # ── Docker ───────────────────────────────────────────────────
 up:
-	docker-compose up --build -d
+	docker compose up --build -d
 
 down:
-	docker-compose down -v
+	docker compose down -v
 
 logs:
-	docker-compose logs -f
+	docker compose logs -f
 
 logs-api:
-	docker-compose logs -f api
+	docker compose logs -f api
 
 logs-worker:
-	docker-compose logs -f worker
+	docker compose logs -f worker
 
 # ── Docker Tests ─────────────────────────────────────────────
 test-docker:
-	docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test
-	docker-compose -f docker-compose.test.yml down -v
+	docker compose -f docker compose.test.yml up --build --abort-on-container-exit --exit-code-from test
+	docker compose -f docker compose.test.yml down -v
 
 # ── Individual Builds ────────────────────────────────────────
 docker-build:
-	docker-compose build
+	docker compose build
 
 docker-build-api:
-	docker-compose build api
+	docker compose build api
 
 docker-build-worker:
-	docker-compose build worker
+	docker compose build worker
 
 # ── Quick Demo ───────────────────────────────────────────────
 demo:
 	@echo "Starting Notifii..."
-	docker-compose up --build -d
+	docker compose up --build -d
 	@echo ""
 	@echo "Waiting for services..."
 	@sleep 5
@@ -73,14 +73,14 @@ demo:
 
 # ── Tracing (Jaeger) ─────────────────────────────────────────
 up-jaeger:
-	docker-compose -f docker-compose-jaeger.yml up --build -d
+	docker compose -f docker compose-jaeger.yml up --build -d
 	@echo ""
 	@echo "Jaeger UI: http://localhost:16686"
 	@echo "API:       http://localhost:8000"
 	@echo "Mailhog:   http://localhost:8025"
 
 down-jaeger:
-	docker-compose -f docker-compose-jaeger.yml down -v
+	docker compose -f docker compose-jaeger.yml down -v
 
 # ── Load Testing (k6) ────────────────────────────────────────
 load-test:

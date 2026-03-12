@@ -10,7 +10,7 @@ git clone https://github.com/prakhyatc/notifii.git
 cd notifii
 
 # Option 1: Docker (recommended)
-docker-compose up --build
+docker compose up --build
 
 # Option 2: Local Python
 python -m venv .venv

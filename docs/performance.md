@@ -225,7 +225,7 @@ Key observations:
 
 ```bash
 # Scale workers to 3 instances
-docker-compose up --scale worker=3 -d
+docker compose up --scale worker=3 -d
 
 # Run load test — notice faster drain rate
 make load-test-heavy

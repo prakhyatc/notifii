@@ -83,7 +83,7 @@ A single notification produces this span tree:
 
 ```bash
 # Start the full stack with tracing enabled
-docker-compose -f docker-compose-jaeger.yml up --build
+docker compose -f docker-compose-jaeger.yml up --build
 
 # Services:
 #   API:        http://localhost:8000
@@ -236,4 +236,4 @@ graph TB
 | Dashboard | http://localhost:5173 | Metrics charts, queue depth, DLQ |
 | Prometheus | http://localhost:8000/metrics | Raw metric values |
 | Mailhog | http://localhost:8025 | Captured emails |
-| Docker logs | `docker-compose logs -f` | Structured JSON logs with trace IDs |
+| Docker logs | `docker compose logs -f` | Structured JSON logs with trace IDs |

@@ -88,7 +88,7 @@ Or start manually:
 
 ```bash
 cp .env.example .env
-docker-compose up --build
+docker compose up --build
 ```
 
 Then send your first notification:
